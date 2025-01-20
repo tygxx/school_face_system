@@ -54,6 +54,24 @@ conda install -c conda-forge dlib
 # 安装其他依赖
 pip install opencv-python face-recognition SQLAlchemy python-dotenv
 ```
+4. 在 M1/M2 Mac 上安装依赖-特殊处理
+```bash
+# 1. 删除现有环境（如果需要重新开始）
+conda deactivate
+conda env remove -n face_system
+
+# 2. 创建新环境并激活
+conda create -n face_system python=3.10
+conda activate face_system
+
+# 3. 使用conda-forge安装核心依赖
+conda install -c conda-forge dlib
+conda install -c conda-forge face_recognition
+conda install -c conda-forge opencv
+
+# 4. 安装其他依赖
+pip install python-dotenv SQLAlchemy
+```
 
 ## 使用说明
 
@@ -99,26 +117,6 @@ school_face_system/
 └── requirements.txt        # 项目依赖
 ```
 
-## 注意事项
-
-1. 确保摄像头正常工作且已授权访问
-2. 建议在光线充足的环境下使用
-3. 首次运行时需要录入学生和家长的人脸信息
-4. 请确保数据库配置正确
-
-## 后续开发计划
-
-- [ ] 添加Web管理界面
-- [ ] 实现数据库存储
-- [ ] 添加用户认证
-- [ ] 优化识别准确度
-- [ ] 添加历史记录查询
-- [ ] 实现实时告警通知
-
-## 技术支持
-
-如有问题或建议，请提交 Issue 或联系开发团队。
-
 ## 核心依赖库说明
 
 本项目使用了以下核心依赖库：
@@ -162,3 +160,24 @@ school_face_system/
 ```bash
 mysql -u root -p < schema.sql
 ``` 
+
+
+## 注意事项
+
+1. 确保摄像头正常工作且已授权访问
+2. 建议在光线充足的环境下使用
+3. 首次运行时需要录入学生和家长的人脸信息
+4. 请确保数据库配置正确
+
+## 后续开发计划
+
+- [ ] 添加Web管理界面
+- [ ] 实现数据库存储
+- [ ] 添加用户认证
+- [ ] 优化识别准确度
+- [ ] 添加历史记录查询
+- [ ] 实现实时告警通知
+
+## 技术支持
+
+如有问题或建议，请提交 Issue 或联系开发团队。
