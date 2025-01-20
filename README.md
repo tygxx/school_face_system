@@ -70,7 +70,7 @@ conda install -c conda-forge face_recognition
 conda install -c conda-forge opencv
 
 # 4. 安装其他依赖
-pip install python-dotenv SQLAlchemy
+pip install python-dotenv SQLAlchemy mysql-connector-python
 ```
 
 ## 使用说明

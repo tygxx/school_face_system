@@ -4,6 +4,8 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from .database import DatabaseManager
 from .utils.logger import setup_logger
+import os
+from .utils.face_detector import FaceDetectorUtil
 
 logger = setup_logger('student_registration')
 
@@ -11,7 +13,11 @@ logger = setup_logger('student_registration')
 class StudentRegistration:
     def __init__(self):
         self.db = DatabaseManager()
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        try:
+            self.face_cascade = FaceDetectorUtil.get_face_cascade()
+        except Exception as e:
+            print(f"初始化人脸检测器时出错：{str(e)}")
+            raise
 
     def capture_face(self) -> Tuple[bool, Optional[np.ndarray], Optional[str]]:
         """
