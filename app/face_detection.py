@@ -49,6 +49,12 @@ class FaceDetector:
         self.known_face_encodings = []
         self.known_face_metadata = []
         self.system_font_path = get_system_font()
+        # 添加人脸验证历史记录
+        self.face_verification_history = {}
+        # 配置参数
+        self.REQUIRED_CONSECUTIVE_MATCHES = 3  # 需要连续匹配的次数
+        self.CONFIDENCE_THRESHOLD = 0.5  # 置信度阈值, 0.5表示50%的置信度, 该值越小，越严格 
+        self.MAX_HISTORY_SIZE = 10  # 历史记录最大保存帧数
         self.load_registered_faces()
         logger.info("FaceDetector initialized")
         
@@ -126,6 +132,7 @@ class FaceDetector:
             face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
             
             face_results = []
+            current_timestamp = datetime.now().timestamp()
             
             for face_encoding, face_location in zip(face_encodings, face_locations):
                 # 在已知人脸中查找匹配
@@ -140,11 +147,52 @@ class FaceDetector:
                     logger.debug(f"最佳匹配索引: {best_match_index}")
                     logger.debug(f"最佳匹配距离: {face_distances[best_match_index]}")
                     logger.debug(f"匹配结果: {matches}")
+
+                # 获取当前检测到的人脸的特征向量字符串表示，用作唯一标识
+                face_id = str(face_encoding.tobytes())
                 
                 if best_match_index is not None and matches[best_match_index]:
                     metadata = self.known_face_metadata[best_match_index].copy()
+                    confidence = 1 - face_distances[best_match_index]
+                    
+                    # 更新人脸验证历史
+                    if face_id not in self.face_verification_history:
+                        self.face_verification_history[face_id] = {
+                            'matches': [],
+                            'last_seen': current_timestamp
+                        }
+                    
+                    # 添加新的匹配结果
+                    self.face_verification_history[face_id]['matches'].append({
+                        'metadata': metadata,
+                        'confidence': confidence,
+                        'timestamp': current_timestamp
+                    })
+                    
+                    # 保持历史记录在最大大小以内
+                    if len(self.face_verification_history[face_id]['matches']) > self.MAX_HISTORY_SIZE:
+                        self.face_verification_history[face_id]['matches'].pop(0)
+                    
+                    # 检查最近的匹配结果
+                    recent_matches = self.face_verification_history[face_id]['matches'][-self.REQUIRED_CONSECUTIVE_MATCHES:]
+                    
+                    # 验证连续匹配和置信度
+                    if len(recent_matches) >= self.REQUIRED_CONSECUTIVE_MATCHES:
+                        # 检查是否所有最近的匹配都指向同一个人
+                        same_person = all(
+                            match['metadata']['id'] == metadata['id'] 
+                            and match['confidence'] >= self.CONFIDENCE_THRESHOLD
+                            for match in recent_matches
+                        )
+                        
+                        if not same_person:
+                            metadata = {"type": "unknown"}
+                            logger.debug(f"人脸验证失败：连续匹配不一致或置信度不足")
                 else:
                     metadata = {"type": "unknown"}
+                
+                # 清理过期的历史记录
+                self._cleanup_verification_history(current_timestamp)
                 
                 # 转换回原始图像大小
                 top, right, bottom, left = face_location
@@ -342,3 +390,13 @@ class FaceDetector:
         frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         
         return frame
+
+    def _cleanup_verification_history(self, current_timestamp, max_age=30): # 自动清理30秒内未出现的人脸记录，防止内存占用过大
+        """清理超过指定时间的人脸验证历史记录"""
+        expired_faces = []
+        for face_id, history in self.face_verification_history.items():
+            if current_timestamp - history['last_seen'] > max_age:
+                expired_faces.append(face_id)
+        
+        for face_id in expired_faces:
+            del self.face_verification_history[face_id]
