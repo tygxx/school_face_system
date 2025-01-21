@@ -122,7 +122,7 @@ class FaceDetector:
             rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
             
             # 检测人脸位置
-            face_locations = face_recognition.face_locations(rgb_small_frame)
+            face_locations = self.detect_faces(rgb_small_frame)
             face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
             
             face_results = []
@@ -206,6 +206,26 @@ class FaceDetector:
             
         except Exception as e:
             raise FaceDetectionError(f"Error processing frame: {str(e)}")
+
+    def detect_faces(self, frame):
+        try:
+            # 尝试使用CNN模型
+            face_locations = face_recognition.face_locations(
+                frame,
+                model="cnn",
+                number_of_times_to_upsample=1
+            )
+            # logger.info(f"检测到 {len(face_locations)} 张人脸")
+        except Exception as e:
+            # 如果CNN失败，回退到HOG模型
+            logger.info("GPU模型加载失败，使用CPU模型")
+            face_locations = face_recognition.face_locations(
+                frame,
+                model="hog",  # 使用CPU友好的HOG模型
+                number_of_times_to_upsample=1
+            )
+        
+        return face_locations
 
     def verify_relationship(self, student_id: str, guardian_id: str) -> bool:
         """验证学生和监护人的关系"""
