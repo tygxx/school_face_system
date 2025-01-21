@@ -116,4 +116,42 @@ class GuardianRegistration:
             return True
         else:
             logger.error("关系绑定失败")
-            return False 
+            return False
+
+    def register_from_image(self, image_path, guardian_id, name, phone):
+        """从图片注册监护人人脸信息"""
+        try:
+            # 读取图片
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"无法读取图片: {image_path}")
+            
+            # 转换颜色空间（OpenCV使用BGR，face_recognition需要RGB）
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # 检测人脸
+            face_locations = face_recognition.face_locations(rgb_image)
+            if not face_locations:
+                raise ValueError("图片中未检测到人脸")
+            if len(face_locations) > 1:
+                raise ValueError("图片中检测到多个人脸，请提供单人照片")
+            
+            # 提取人脸特征
+            face_encoding = face_recognition.face_encodings(rgb_image, face_locations)[0]
+            
+            # 将numpy数组转换为bytes格式（与原有录入方式一致）
+            face_encoding_bytes = face_encoding.tobytes()
+            
+            # 保存到数据库
+            self.db.add_guardian(
+                guardian_id=guardian_id,
+                name=name,
+                phone=phone,
+                face_encoding=face_encoding_bytes  # 使用bytes格式，与实时录入保持一致
+            )
+            
+            return True, "监护人注册成功"
+        
+        except Exception as e:
+            logger.error(f"图片注册失败: {str(e)}")
+            return False, f"注册失败: {str(e)}" 

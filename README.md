@@ -52,7 +52,7 @@ conda activate face_system
 conda install -c conda-forge dlib
 
 # 安装其他依赖
-pip install opencv-python face-recognition SQLAlchemy python-dotenv
+pip install opencv-python face-recognition SQLAlchemy python-dotenv mysql-connector-python
 ```
 4. 在 M1/M2 Mac 上安装依赖-特殊处理
 ```bash
