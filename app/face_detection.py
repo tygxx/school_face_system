@@ -209,18 +209,20 @@ class FaceDetector:
 
     def detect_faces(self, frame):
         try:
+            # 先进行图像预处理
+            processed_frame = self.preprocess_frame(frame)
+            
             # 尝试使用CNN模型
             face_locations = face_recognition.face_locations(
-                frame,
+                processed_frame,
                 model="cnn",
                 number_of_times_to_upsample=1
             )
-            # logger.info(f"检测到 {len(face_locations)} 张人脸")
         except Exception as e:
             # 如果CNN失败，回退到HOG模型
-            logger.info("GPU模型加载失败，使用CPU模型")
+            print("GPU模型加载失败，使用CPU模型")
             face_locations = face_recognition.face_locations(
-                frame,
+                processed_frame,
                 model="hog",  # 使用CPU友好的HOG模型
                 number_of_times_to_upsample=1
             )
@@ -324,3 +326,19 @@ class FaceDetector:
             logger.info("Cleaning up resources")
             cap.release()
             cv2.destroyAllWindows() 
+
+    def preprocess_frame(self, frame): # 图像预处理，调整大小和光线补偿
+        # 调整大小
+        height, width = frame.shape[:2]
+        if width > 640:  # 保持合适的处理大小
+            frame = cv2.resize(frame, (640, int(height * 640 / width)))
+        
+        # 光线补偿
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        l = clahe.apply(l)
+        lab = cv2.merge((l,a,b))
+        frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        
+        return frame
