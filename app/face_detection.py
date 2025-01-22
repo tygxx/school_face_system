@@ -136,7 +136,7 @@ class FaceDetector:
             
             for face_encoding, face_location in zip(face_encodings, face_locations):
                 # 在已知人脸中查找匹配
-                matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=0.6)
+                matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=0.45)  # 降低容差值，提高严格度
                 face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
                 
                 best_match_index = np.argmin(face_distances) if len(face_distances) > 0 else None
@@ -151,7 +151,10 @@ class FaceDetector:
                 # 获取当前检测到的人脸的特征向量字符串表示，用作唯一标识
                 face_id = str(face_encoding.tobytes())
                 
-                if best_match_index is not None and matches[best_match_index]:
+                # 更严格的匹配逻辑
+                if (best_match_index is not None and 
+                    matches[best_match_index] and 
+                    face_distances[best_match_index] < 0.45):  # 添加距离阈值判断
                     metadata = self.known_face_metadata[best_match_index].copy()
                     confidence = 1 - face_distances[best_match_index]
                     
@@ -176,20 +179,22 @@ class FaceDetector:
                     # 检查最近的匹配结果
                     recent_matches = self.face_verification_history[face_id]['matches'][-self.REQUIRED_CONSECUTIVE_MATCHES:]
                     
-                    # 验证连续匹配和置信度
+                    # 更严格的验证逻辑：要求连续匹配且平均置信度达到阈值
                     if len(recent_matches) >= self.REQUIRED_CONSECUTIVE_MATCHES:
-                        # 检查是否所有最近的匹配都指向同一个人
+                        # 检查是否所有最近的匹配都指向同一个人，且平均置信度达到要求
                         same_person = all(
-                            match['metadata']['id'] == metadata['id'] 
-                            and match['confidence'] >= self.CONFIDENCE_THRESHOLD
+                            match['metadata']['id'] == metadata['id']
                             for match in recent_matches
                         )
+                        avg_confidence = sum(match['confidence'] for match in recent_matches) / len(recent_matches)
                         
-                        if not same_person:
+                        if not same_person or avg_confidence < self.CONFIDENCE_THRESHOLD:
                             metadata = {"type": "unknown"}
-                            logger.debug(f"人脸验证失败：连续匹配不一致或置信度不足")
+                            logger.debug(f"人脸验证失败：连续匹配不一致或平均置信度不足 ({avg_confidence:.3f})")
                 else:
                     metadata = {"type": "unknown"}
+                    if best_match_index is not None:
+                        logger.debug(f"人脸验证失败：距离值 {face_distances[best_match_index]:.3f} 超过阈值 0.45")
                 
                 # 清理过期的历史记录
                 self._cleanup_verification_history(current_timestamp)
