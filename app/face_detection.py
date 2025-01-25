@@ -1,11 +1,12 @@
 import cv2
-import face_recognition
 import numpy as np
 from typing import List, Tuple, Dict
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import os
 import platform
+import insightface
+from insightface.app import FaceAnalysis
 
 from .database import DatabaseManager
 from .utils.logger import setup_logger, handle_exceptions
@@ -49,11 +50,20 @@ class FaceDetector:
         self.known_face_encodings = []
         self.known_face_metadata = []
         self.system_font_path = get_system_font()
+        
+        # 初始化 InsightFace
+        self.face_app = FaceAnalysis(providers=['CPUExecutionProvider'])
+        self.face_app.prepare(ctx_id=0, det_size=(640, 640))
+        logger.info("InsightFace model initialized")
+        
+        # 特征维度
+        self.FEATURE_DIM = 512  # InsightFace 特征维度
+        
         # 添加人脸验证历史记录
         self.face_verification_history = {}
         # 配置参数
         self.REQUIRED_CONSECUTIVE_MATCHES = 3  # 需要连续匹配的次数
-        self.CONFIDENCE_THRESHOLD = 0.5  # 置信度阈值, 0.5表示50%的置信度, 该值越小，越严格 
+        self.CONFIDENCE_THRESHOLD = 0.3  # 置信度阈值，由于使用余弦相似度，调整为0.3
         self.MAX_HISTORY_SIZE = 10  # 历史记录最大保存帧数
         self.load_registered_faces()
         logger.info("FaceDetector initialized")
@@ -67,31 +77,43 @@ class FaceDetector:
             for student_id, face_encoding_bytes in face_data['students'].items():
                 student = self.db.get_student_by_id(student_id)
                 if student and face_encoding_bytes:
-                    face_encoding = np.frombuffer(face_encoding_bytes, dtype=np.float64)
-                    logger.debug(f"学生 {student['name']} 的人脸编码形状: {face_encoding.shape}")
-                    logger.debug(f"人脸编码数据类型: {face_encoding.dtype}")
-                    self.known_face_encodings.append(face_encoding)
-                    self.known_face_metadata.append({
-                        'type': 'student',
-                        'id': student_id,
-                        'name': student['name'],
-                        'class_name': student['class_name']
-                    })
+                    try:
+                        face_encoding = np.frombuffer(face_encoding_bytes, dtype=np.float32)
+                        # 检查特征维度
+                        if len(face_encoding) != self.FEATURE_DIM:
+                            logger.warning(f"跳过维度不匹配的特征: {student['name']}, 维度: {len(face_encoding)}")
+                            continue
+                        logger.debug(f"学生 {student['name']} 的人脸编码形状: {face_encoding.shape}")
+                        self.known_face_encodings.append(face_encoding)
+                        self.known_face_metadata.append({
+                            'type': 'student',
+                            'id': student_id,
+                            'name': student['name'],
+                            'class_name': student['class_name']
+                        })
+                    except Exception as e:
+                        logger.error(f"加载学生 {student['name']} 的人脸特征失败: {str(e)}")
             
             # 加载监护人人脸数据
             for guardian_id, face_encoding_bytes in face_data['guardians'].items():
                 guardian = self.db.get_guardian_by_id(guardian_id)
                 if guardian and face_encoding_bytes:
-                    face_encoding = np.frombuffer(face_encoding_bytes, dtype=np.float64)
-                    logger.info(f"监护人 {guardian['name']} 的人脸编码形状: {face_encoding.shape}")
-                    logger.info(f"人脸编码数据类型: {face_encoding.dtype}")
-                    self.known_face_encodings.append(face_encoding)
-                    self.known_face_metadata.append({
-                        'type': 'guardian',
-                        'id': guardian_id,
-                        'name': guardian['name'],
-                        'phone': guardian['phone']
-                    })
+                    try:
+                        face_encoding = np.frombuffer(face_encoding_bytes, dtype=np.float32)
+                        # 检查特征维度
+                        if len(face_encoding) != self.FEATURE_DIM:
+                            logger.warning(f"跳过维度不匹配的特征: {guardian['name']}, 维度: {len(face_encoding)}")
+                            continue
+                        logger.info(f"监护人 {guardian['name']} 的人脸编码形状: {face_encoding.shape}")
+                        self.known_face_encodings.append(face_encoding)
+                        self.known_face_metadata.append({
+                            'type': 'guardian',
+                            'id': guardian_id,
+                            'name': guardian['name'],
+                            'phone': guardian['phone']
+                        })
+                    except Exception as e:
+                        logger.error(f"加载监护人 {guardian['name']} 的人脸特征失败: {str(e)}")
             
             logger.info(f"已加载 {len(self.known_face_encodings)} 个人脸特征")
             
@@ -123,88 +145,81 @@ class FaceDetector:
             raise FaceDetectionError("Invalid frame received")
             
         try:
-            # 缩小图像以加快处理速度
-            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-            
-            # 检测人脸位置
-            face_locations = self.detect_faces(rgb_small_frame)
-            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-            
+            # 检测人脸和提取特征
             face_results = []
             current_timestamp = datetime.now().timestamp()
             
-            for face_encoding, face_location in zip(face_encodings, face_locations):
+            # 获取人脸位置和特征
+            faces = self.detect_faces(frame)
+            
+            for (bbox, face_embedding) in faces:
                 # 在已知人脸中查找匹配
-                matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding, tolerance=0.45)  # 降低容差值，提高严格度
-                face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
-                
-                best_match_index = np.argmin(face_distances) if len(face_distances) > 0 else None
-                
-                # 添加调试信息
-                if len(face_distances) > 0:
-                    logger.debug(f"人脸距离: {face_distances}")
+                if len(self.known_face_encodings) > 0:
+                    # 计算与所有已知人脸的相似度
+                    similarities = [
+                        np.dot(face_embedding, known_encoding) / 
+                        (np.linalg.norm(face_embedding) * np.linalg.norm(known_encoding)) 
+                        for known_encoding in self.known_face_encodings
+                    ]
+                    best_match_index = np.argmax(similarities)
+                    similarity = similarities[best_match_index]
+                    
+                    # 添加调试信息
+                    logger.debug(f"人脸相似度: {similarities}")
                     logger.debug(f"最佳匹配索引: {best_match_index}")
-                    logger.debug(f"最佳匹配距离: {face_distances[best_match_index]}")
-                    logger.debug(f"匹配结果: {matches}")
+                    logger.debug(f"最佳匹配相似度: {similarity}")
 
-                # 获取当前检测到的人脸的特征向量字符串表示，用作唯一标识
-                face_id = str(face_encoding.tobytes())
-                
-                # 更严格的匹配逻辑
-                if (best_match_index is not None and 
-                    matches[best_match_index] and 
-                    face_distances[best_match_index] < 0.45):  # 添加距离阈值判断
-                    metadata = self.known_face_metadata[best_match_index].copy()
-                    confidence = 1 - face_distances[best_match_index]
+                    # 获取当前检测到的人脸的特征向量字符串表示，用作唯一标识
+                    face_id = str(face_embedding.tobytes())
                     
-                    # 更新人脸验证历史
-                    if face_id not in self.face_verification_history:
-                        self.face_verification_history[face_id] = {
-                            'matches': [],
-                            'last_seen': current_timestamp
-                        }
-                    
-                    # 添加新的匹配结果
-                    self.face_verification_history[face_id]['matches'].append({
-                        'metadata': metadata,
-                        'confidence': confidence,
-                        'timestamp': current_timestamp
-                    })
-                    
-                    # 保持历史记录在最大大小以内
-                    if len(self.face_verification_history[face_id]['matches']) > self.MAX_HISTORY_SIZE:
-                        self.face_verification_history[face_id]['matches'].pop(0)
-                    
-                    # 检查最近的匹配结果
-                    recent_matches = self.face_verification_history[face_id]['matches'][-self.REQUIRED_CONSECUTIVE_MATCHES:]
-                    
-                    # 更严格的验证逻辑：要求连续匹配且平均置信度达到阈值
-                    if len(recent_matches) >= self.REQUIRED_CONSECUTIVE_MATCHES:
-                        # 检查是否所有最近的匹配都指向同一个人，且平均置信度达到要求
-                        same_person = all(
-                            match['metadata']['id'] == metadata['id']
-                            for match in recent_matches
-                        )
-                        avg_confidence = sum(match['confidence'] for match in recent_matches) / len(recent_matches)
+                    # 更严格的匹配逻辑
+                    if similarity > 0.5:  # 可以根据需要调整阈值
+                        metadata = self.known_face_metadata[best_match_index].copy()
+                        confidence = similarity
                         
-                        if not same_person or avg_confidence < self.CONFIDENCE_THRESHOLD:
-                            metadata = {"type": "unknown"}
-                            logger.debug(f"人脸验证失败：连续匹配不一致或平均置信度不足 ({avg_confidence:.3f})")
+                        # 更新人脸验证历史
+                        if face_id not in self.face_verification_history:
+                            self.face_verification_history[face_id] = {
+                                'matches': [],
+                                'last_seen': current_timestamp
+                            }
+                        
+                        # 添加新的匹配结果
+                        self.face_verification_history[face_id]['matches'].append({
+                            'metadata': metadata,
+                            'confidence': confidence,
+                            'timestamp': current_timestamp
+                        })
+                        
+                        # 保持历史记录在最大大小以内
+                        if len(self.face_verification_history[face_id]['matches']) > self.MAX_HISTORY_SIZE:
+                            self.face_verification_history[face_id]['matches'].pop(0)
+                        
+                        # 检查最近的匹配结果
+                        recent_matches = self.face_verification_history[face_id]['matches'][-self.REQUIRED_CONSECUTIVE_MATCHES:]
+                        
+                        # 更严格的验证逻辑：要求连续匹配且平均置信度达到阈值
+                        if len(recent_matches) >= self.REQUIRED_CONSECUTIVE_MATCHES:
+                            same_person = all(
+                                match['metadata']['id'] == metadata['id']
+                                for match in recent_matches
+                            )
+                            avg_confidence = sum(match['confidence'] for match in recent_matches) / len(recent_matches)
+                            
+                            if not same_person or avg_confidence < self.CONFIDENCE_THRESHOLD:
+                                metadata = {"type": "unknown"}
+                                logger.debug(f"人脸验证失败：连续匹配不一致或平均置信度不足 ({avg_confidence:.3f})")
+                    else:
+                        metadata = {"type": "unknown"}
+                        logger.debug(f"人脸验证失败：相似度 {similarity:.3f} 低于阈值")
                 else:
                     metadata = {"type": "unknown"}
-                    if best_match_index is not None:
-                        logger.debug(f"人脸验证失败：距离值 {face_distances[best_match_index]:.3f} 超过阈值 0.45")
                 
                 # 清理过期的历史记录
                 self._cleanup_verification_history(current_timestamp)
                 
-                # 转换回原始图像大小
-                top, right, bottom, left = face_location
-                top *= 4
-                right *= 4
-                bottom *= 4
-                left *= 4
+                # 获取边界框坐标
+                top, left, bottom, right = bbox[1], bbox[0], bbox[3], bbox[2]
                 
                 # 在图像上绘制方框和标签
                 if metadata["type"] == "unknown":
@@ -220,7 +235,6 @@ class FaceDetector:
                 cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
                 
                 # 使用支持中文的方式显示标签
-                # 创建一个空白的PIL图像用于绘制文字
                 pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 draw = ImageDraw.Draw(pil_img)
                 
@@ -239,12 +253,9 @@ class FaceDetector:
                 # 计算文本位置
                 y = top - 30
                 for line in label.split('\n'):
-                    # 获取文本边界框
                     bbox = draw.textbbox((left, y), line, font=font)
-                    # 绘制白色背景
                     draw.rectangle([(bbox[0], bbox[1] - 5), (bbox[2], bbox[3] + 5)], fill=(255, 255, 255))
-                    # 绘制文字
-                    draw.text((left, y), line, font=font, fill=color[::-1])  # PIL使用RGB而不是BGR
+                    draw.text((left, y), line, font=font, fill=color[::-1])
                     y += (bbox[3] - bbox[1]) + 5
 
                 # 转换回OpenCV格式
@@ -261,26 +272,14 @@ class FaceDetector:
             raise FaceDetectionError(f"Error processing frame: {str(e)}")
 
     def detect_faces(self, frame):
+        """使用 InsightFace 检测人脸"""
         try:
-            # 先进行图像预处理
-            processed_frame = self.preprocess_frame(frame)
-            
-            # 尝试使用CNN模型
-            face_locations = face_recognition.face_locations(
-                processed_frame,
-                model="cnn",
-                number_of_times_to_upsample=1
-            )
+            # 使用 InsightFace 进行人脸检测和特征提取
+            faces = self.face_app.get(frame)
+            return [(face.bbox.astype(int), face.embedding) for face in faces]
         except Exception as e:
-            # 如果CNN失败，回退到HOG模型
-            print("GPU模型加载失败，使用CPU模型")
-            face_locations = face_recognition.face_locations(
-                processed_frame,
-                model="hog",  # 使用CPU友好的HOG模型
-                number_of_times_to_upsample=1
-            )
-        
-        return face_locations
+            logger.error(f"人脸检测失败: {str(e)}")
+            return []
 
     def verify_relationship(self, student_id: str, guardian_id: str) -> bool:
         """验证学生和监护人的关系"""
@@ -380,7 +379,7 @@ class FaceDetector:
             cap.release()
             cv2.destroyAllWindows() 
 
-    def preprocess_frame(self, frame): # 图像预处理，调整大小和光线补偿
+    def preprocess_frame(self, frame):  # 图像预处理，调整大小和光线补偿
         # 调整大小
         height, width = frame.shape[:2]
         if width > 640:  # 保持合适的处理大小
@@ -388,15 +387,15 @@ class FaceDetector:
         
         # 光线补偿
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
-        l = clahe.apply(l)
-        lab = cv2.merge((l,a,b))
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l_channel = clahe.apply(l_channel)
+        lab = cv2.merge((l_channel, a_channel, b_channel))
         frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         
         return frame
 
-    def _cleanup_verification_history(self, current_timestamp, max_age=30): # 自动清理30秒内未出现的人脸记录，防止内存占用过大
+    def _cleanup_verification_history(self, current_timestamp, max_age=30):  # 自动清理30秒内未出现的人脸记录
         """清理超过指定时间的人脸验证历史记录"""
         expired_faces = []
         for face_id, history in self.face_verification_history.items():

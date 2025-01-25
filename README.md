@@ -40,45 +40,37 @@ bash Miniconda3-latest-Linux-x86_64.sh
 2. 创建并激活虚拟环境
 ```bash
 # 创建环境
-conda create -n face_system python=3.10
+conda create -n face_system_insight python=3.10
 
 # 激活环境
-conda activate face_system
+conda activate face_system_insight
 ```
 
 3. 安装依赖
 ```bash
-# 安装 dlib（通过 conda-forge）
-conda install -c conda-forge dlib
 
-# 安装其他依赖
-pip install opencv-python face-recognition SQLAlchemy python-dotenv mysql-connector-python
-```
-4. 在 M1/M2 Mac 上安装依赖-特殊处理
-```bash
-# 1. 删除现有环境（如果需要重新开始）
-conda deactivate
-conda env remove -n face_system
+1、基础依赖
 
-# 2. 创建新环境并激活
-conda create -n face_system python=3.10
-conda activate face_system
+conda install -c conda-forge dlib numpy opencv onnxruntime pillow onnx face_recognition
 
-# 3. 使用conda-forge安装核心依赖
-conda install -c conda-forge dlib
-conda install -c conda-forge face_recognition
-conda install -c conda-forge opencv
+2、 安装 InsightFace
+pip install -U -i https://mirrors.aliyun.com/pypi/simple insightface
 
-# 4. 安装其他依赖
-pip install python-dotenv SQLAlchemy mysql-connector-python
+3、安装 InsightFace 的依赖项，用于运行其人脸检测和识别
+pip install onnxruntime-gpu  # 如果有 NVIDIA GPU
+\# 或
+pip install onnxruntime     # CPU 版本
+
+4、其它依赖
+pip install SQLAlchemy mysql-connector-python
 ```
 
 ## 使用说明
 
 1. 启动系统
 ```bash
-# 确保在 face_system 环境中
-conda activate face_system
+# 确保在 face_system_insight 环境中
+conda activate face_system_insight
 
 # 运行程序
 python main.py
